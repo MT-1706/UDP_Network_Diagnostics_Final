@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UDP Network Diagnostic Tool</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Network Diagnostic &amp; Path Analysis</h1>
+    <p class="sub">UDP probes &middot; RTT &middot; packet loss &middot; SDN path correlation</p>
+  </div>
+  <span id="topoBadge" class="badge">topology: loading…</span>
+</header>
+
+<main>
+  <section class="card controls">
+    <form id="probeForm">
+      <label>Source
+        <input id="srcIp" type="text" value="10.0.0.1" readonly>
+      </label>
+      <label>Destination IP
+        <input id="dstIp" type="text" value="10.0.0.2" required
+               pattern="^\d{1,3}(\.\d{1,3}){3}$" list="hostList">
+        <datalist id="hostList"></datalist>
+      </label>
+      <label>Probes
+        <input id="count" type="number" min="1" max="200" value="20">
+      </label>
+      <button id="runBtn" type="submit">Run diagnosis</button>
+    </form>
+    <p id="msg" class="msg" role="status"></p>
+  </section>
+
+  <section id="banner" class="banner hidden"></section>
+
+  <section class="stats">
+    <div class="stat"><span class="k">RTT min</span><span class="v" id="sMin">–</span></div>
+    <div class="stat"><span class="k">RTT avg</span><span class="v" id="sAvg">–</span></div>
+    <div class="stat"><span class="k">RTT max</span><span class="v" id="sMax">–</span></div>
+    <div class="stat"><span class="k">Jitter</span><span class="v" id="sJit">–</span></div>
+    <div class="stat"><span class="k">Packet loss</span><span class="v" id="sLoss">–</span></div>
+    <div class="stat"><span class="k">Sent / Recv</span><span class="v" id="sCnt">–</span></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>SDN topology &amp; active path</h2>
+      <svg id="topo" viewBox="0 0 800 400" role="img" aria-label="Network topology"></svg>
+      <ul class="legend">
+        <li><i class="sw"></i>Switch</li>
+        <li><i class="ho"></i>Host</li>
+        <li><i class="ln ok"></i>Healthy path</li>
+        <li><i class="ln warn"></i>Degraded</li>
+        <li><i class="ln bad"></i>Failed path</li>
+        <li><i class="ln down"></i>Link down</li>
+        <li><i class="ln alt"></i>Selected alternative</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Diagnosis</h2>
+      <p id="diag" class="diag idle">Run a diagnosis to see results.</p>
+      <dl class="kv">
+        <dt>Route</dt><dd id="route">–</dd>
+        <dt>Path source</dt><dd id="pathSrc">–</dd>
+        <dt>Switch hops</dt><dd id="hops">–</dd>
+        <dt>Root cause</dt><dd id="cause" class="wrap">–</dd>
+        <dt>Failed links</dt><dd id="downLinks">none</dd>
+        <dt>Suspect links</dt><dd id="suspects">–</dd>
+        <dt>Suggested reroute</dt><dd id="recommend">–</dd>
+      </dl>
+      <h3>Lost probe sequence numbers</h3>
+      <p id="lostSeq" class="mono">–</p>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Failure testing</h2>
+    <p class="note" style="margin-top:0">Take a link down to simulate a failure. The dashboard waits for the
+      controller to notice, then re-runs the diagnosis with the destination above. Needs the live Ryu
+      topology and <code>sudo</code>.</p>
+    <div id="linkCtl" class="linkctl"><span class="empty">Loading links…</span></div>
+    <button id="resetBtn" type="button" class="ghost">Reset remembered topology &amp; history</button>
+  </section>
+
+  <section class="card" id="sdnCard">
+    <h2>Dynamic SDN control</h2>
+    <p id="sdnState" class="note" style="margin-top:0">Checking controller…</p>
+    <div class="row">
+      <button id="measureBtn" type="button">Measure every path</button>
+      <button id="clearPolicyBtn" type="button" class="ghost">Clear pinned path</button>
+    </div>
+    <p class="note">Pins each loop-free path in the controller in turn, probes it, and compares the
+      <b>measured</b> RTT / loss / jitter. Click <i>Use this path</i> to make the controller route over it.</p>
+    <div class="scroll">
+      <table id="measTable">
+        <thead><tr><th>Path</th><th>Hops</th><th>Expected RTT</th><th>Measured RTT</th>
+          <th>Jitter</th><th>Loss</th><th></th></tr></thead>
+        <tbody><tr><td colspan="7" class="empty">Not measured yet.</td></tr></tbody>
+      </table>
+    </div>
+    <p id="measVerdict" class="note"></p>
+  </section>
+
+  <section class="card" id="stressCard">
+    <h2>Robustness scenarios</h2>
+    <h3>Link impairment (tc netem)</h3>
+    <div class="row">
+      <select id="impLink"></select>
+      <label>Loss % <input id="impLoss" type="number" min="0" max="100" step="0.5" value="10"></label>
+      <label>Extra delay ms <input id="impDelay" type="number" min="0" max="2000" value="0"></label>
+      <button id="impApply" type="button">Apply</button>
+      <button id="impClear" type="button" class="ghost">Clear</button>
+    </div>
+    <p id="impState" class="note"></p>
+    <h3>Failover test</h3>
+    <div class="row">
+      <select id="foLink"></select>
+      <label>Duration s <input id="foDur" type="number" min="4" max="60" value="10"></label>
+      <button id="foBtn" type="button">Run failover test</button>
+    </div>
+    <p class="note">Streams a probe every 20 ms, fails the link at 30 % of the run, restores it at 70 %,
+      and reports the service outage and how fast the controller reacted.</p>
+    <dl class="kv" id="foResult"></dl>
+  </section>
+
+  <section class="card">
+    <h2>Path comparison</h2>
+    <div class="scroll">
+      <table id="pathTable">
+        <thead><tr><th>Path</th><th>Hops</th><th>Status</th>
+          <th>Measured RTT</th><th>Est. RTT*</th></tr></thead>
+        <tbody><tr><td colspan="5" class="empty">No data yet.</td></tr></tbody>
+      </table>
+    </div>
+    <p class="note">* Estimated from the measured minimum RTT assuming equal delay on every
+      inter-switch link. Only the active path is actually probed; click a row to preview an
+      alternative on the map.</p>
+  </section>
+
+  <section class="card">
+    <h2>History</h2>
+    <div class="scroll">
+      <table id="histTable">
+        <thead><tr><th>Time</th><th>Destination</th><th>Path</th><th>Avg RTT</th>
+          <th>Jitter</th><th>Loss</th><th>Status</th></tr></thead>
+        <tbody><tr><td colspan="7" class="empty">No runs yet.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
