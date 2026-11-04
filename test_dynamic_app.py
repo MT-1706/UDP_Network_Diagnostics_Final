@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Unit/integration-style tests for the Ryu app without launching Mininet.
+# Fake datapaths record OpenFlow messages, allowing assertions about routes,
+# ARP handling and flow installation while using Ryu's real message classes.
 """
 Tests for dynamic_path_app.py without Mininet: fake switches built from Ryu's real
 OpenFlow 1.3 message classes.  Run with the Python that has Ryu installed:
@@ -20,6 +23,8 @@ H1, H2, H3 = "00:00:00:00:00:01", "00:00:00:00:00:02", "00:00:00:00:00:03"
 
 
 class FakeDP:
+     # A lightweight stand-in for an OpenFlow switch connection. Instead of
+    # transmitting messages over a socket, it stores them in the sent list.
     ofproto, ofproto_parser = ofproto_v1_3, ofproto_v1_3_parser
 
     def __init__(self, i):
@@ -30,6 +35,8 @@ class FakeDP:
 
 
 def link(a, ap, b, bp):
+    # Create an object shaped like a Ryu discovered link: source DPID/port
+    # and destination DPID/port. DPID is the numeric switch identifier.
     return types.SimpleNamespace(src=types.SimpleNamespace(dpid=a, port_no=ap),
                                  dst=types.SimpleNamespace(dpid=b, port_no=bp))
 
@@ -39,6 +46,8 @@ TRIANGLE = [(1, 2, 2, 2), (2, 3, 3, 2), (1, 3, 3, 3)]
 
 
 def both(pairs):
+    # Ryu reports each direction separately, so turn each physical link into
+    # two directed link records (A->B and B->A).
     out = []
     for a, ap, b, bp in pairs:
         out += [link(a, ap, b, bp), link(b, bp, a, ap)]
@@ -46,6 +55,8 @@ def both(pairs):
 
 
 def arp_pkt(op, smac, sip, dmac, dip):
+    # Build a real serialized Ethernet + ARP frame for the controller handler.
+    # This lets tests exercise packet parsing, not just call helper functions.
     p = packet.Packet()
     dst = "ff:ff:ff:ff:ff:ff" if op == arp.ARP_REQUEST else dmac
     p.add_protocol(ethernet.ethernet(ethertype=ether_types.ETH_TYPE_ARP, dst=dst, src=smac))
@@ -70,6 +81,8 @@ def pin_event(dp, in_port, data):
 
 
 class Base(unittest.TestCase):
+     # Shared setup used by controller tests: fake topology discovery, temporary
+    # policy/state files, fake switches, and a helper to teach the app all hosts.
     def make_app(self, pairs=TRIANGLE):
         self.links = both(pairs)
         app_mod.get_link = lambda *a, **k: self.links
@@ -107,6 +120,8 @@ class Base(unittest.TestCase):
 
 
 class TestEngine(unittest.TestCase):
+     # Tests the graph algorithm independently of Ryu: shortest path, valid
+    # dashboard pins, ignoring invalid pins, and unreachable destinations.
     def test_default_pin_and_failover(self):
         e = PathEngine()
         e.set_links([(a, ap, b, bp) for a, ap, b, bp in
@@ -131,6 +146,8 @@ class TestEngine(unittest.TestCase):
 
 
 class TestApp(Base):
+    # Tests the full controller behaviour using fake switches: ARP, host learning,
+    # flow rules, link failure rerouting, policy pins and malformed packets.
     def test_arp_flood_only_on_edge_ports(self):
         app = self.make_app()
         app._packet_in(pin_event(app.dps[1], 1, arp_pkt(arp.ARP_REQUEST, H1, "10.0.0.1", "", "10.0.0.2")))
@@ -159,6 +176,8 @@ class TestApp(Base):
         self.assertEqual(po[0].actions[0].port, 1)
 
     def test_reroute_on_link_failure(self):
+        # Remove the direct s1-s3 link. The controller must recalculate the
+        # route to h2 through s1-s2-s3 and change s1's output port accordingly.
         app = self.make_app()
         self.learn_all(app)
         self.assertEqual(app.engine.trace(1, 3, app.routes[H2]), [1, 3])
@@ -196,6 +215,8 @@ class TestApp(Base):
         self.assertEqual(app.engine.trace(1, 3, app.routes[H2]), [1, 3])
 
     def test_unreachable_host_flows_removed(self):
+        # Disconnect s3 from the rest of the graph. Verify there is no route
+        # to h2 and that the old destination flow is deleted from s1.
         app = self.make_app()
         self.learn_all(app)
         self.links = both([(1, 2, 2, 2)])                              # s3 isolated
