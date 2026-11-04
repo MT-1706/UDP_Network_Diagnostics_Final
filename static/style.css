@@ -113,8 +113,3 @@ tbody tr.pick { cursor: pointer; } tbody tr.pick:hover, tbody tr.sel { backgroun
 .lk.down button { background: var(--ok); }
 button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 500; font-size: .8rem; }
 code { font-family: var(--mono); font-size: .85em; }
-
-.row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:end;margin:.5rem 0}
-.row label{display:flex;flex-direction:column;font-size:.8rem;gap:.2rem}
-.row select,.row input{padding:.4rem;border:1px solid #8884;border-radius:6px;background:transparent;color:inherit;font:inherit}
-.row input[type=number]{width:6.5rem}

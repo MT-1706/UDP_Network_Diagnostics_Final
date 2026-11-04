@@ -65,7 +65,6 @@
       <p id="diag" class="diag idle">Run a diagnosis to see results.</p>
       <dl class="kv">
         <dt>Route</dt><dd id="route">–</dd>
-        <dt>Path source</dt><dd id="pathSrc">–</dd>
         <dt>Switch hops</dt><dd id="hops">–</dd>
         <dt>Root cause</dt><dd id="cause" class="wrap">–</dd>
         <dt>Failed links</dt><dd id="downLinks">none</dd>
@@ -84,47 +83,6 @@
       topology and <code>sudo</code>.</p>
     <div id="linkCtl" class="linkctl"><span class="empty">Loading links…</span></div>
     <button id="resetBtn" type="button" class="ghost">Reset remembered topology &amp; history</button>
-  </section>
-
-  <section class="card" id="sdnCard">
-    <h2>Dynamic SDN control</h2>
-    <p id="sdnState" class="note" style="margin-top:0">Checking controller…</p>
-    <div class="row">
-      <button id="measureBtn" type="button">Measure every path</button>
-      <button id="clearPolicyBtn" type="button" class="ghost">Clear pinned path</button>
-    </div>
-    <p class="note">Pins each loop-free path in the controller in turn, probes it, and compares the
-      <b>measured</b> RTT / loss / jitter. Click <i>Use this path</i> to make the controller route over it.</p>
-    <div class="scroll">
-      <table id="measTable">
-        <thead><tr><th>Path</th><th>Hops</th><th>Expected RTT</th><th>Measured RTT</th>
-          <th>Jitter</th><th>Loss</th><th></th></tr></thead>
-        <tbody><tr><td colspan="7" class="empty">Not measured yet.</td></tr></tbody>
-      </table>
-    </div>
-    <p id="measVerdict" class="note"></p>
-  </section>
-
-  <section class="card" id="stressCard">
-    <h2>Robustness scenarios</h2>
-    <h3>Link impairment (tc netem)</h3>
-    <div class="row">
-      <select id="impLink"></select>
-      <label>Loss % <input id="impLoss" type="number" min="0" max="100" step="0.5" value="10"></label>
-      <label>Extra delay ms <input id="impDelay" type="number" min="0" max="2000" value="0"></label>
-      <button id="impApply" type="button">Apply</button>
-      <button id="impClear" type="button" class="ghost">Clear</button>
-    </div>
-    <p id="impState" class="note"></p>
-    <h3>Failover test</h3>
-    <div class="row">
-      <select id="foLink"></select>
-      <label>Duration s <input id="foDur" type="number" min="4" max="60" value="10"></label>
-      <button id="foBtn" type="button">Run failover test</button>
-    </div>
-    <p class="note">Streams a probe every 20 ms, fails the link at 30 % of the run, restores it at 70 %,
-      and reports the service outage and how fast the controller reacted.</p>
-    <dl class="kv" id="foResult"></dl>
   </section>
 
   <section class="card">

@@ -122,7 +122,7 @@ async function toggleLink(a, b, action) {
 
 function setBusy(v) {
   busy = v; $("runBtn").disabled = v;
-  document.querySelectorAll(".lk button, #sdnCard button, #stressCard button").forEach(b => b.disabled = v);
+  document.querySelectorAll(".lk button").forEach(b => b.disabled = v);
 }
 
 /* ---------- render results ---------- */
@@ -139,7 +139,6 @@ function render(r) {
   const d = $("diag"); d.textContent = r.diagnosis; d.className = "diag " + r.status;
   $("route").textContent = r.primary ? r.primary.join(" → ") : "NO PATH";
   $("hops").textContent = r.primary ? r.primary.length : "n/a";
-  $("pathSrc").textContent = r.path_source === "controller" ? "controller (verified flow tables)" : "inferred from topology (BFS)";
   $("cause").textContent = r.cause || "–";
   $("downLinks").textContent = r.down_links.length ? r.down_links.map(l => l.join("–")).join(", ") : "none";
   $("suspects").textContent = r.suspect_links.length ? r.suspect_links.map(l => l.join("–")).join(", ") : "none";
@@ -202,7 +201,7 @@ function badge(src) {
 }
 
 /* ---------- actions ---------- */
-async function loadTopology_() {
+async function loadTopology() {
   try {
     const t = await (await fetch("/api/topology")).json();
     topo = t; $("srcIp").value = t.src_ip; badge(t.source);
@@ -234,99 +233,4 @@ $("resetBtn").addEventListener("click", async () => {
   last = null; loadTopology(); loadHistory(); say("Remembered topology and history cleared.");
 });
 
-/* ---------- dynamic SDN panels ---------- */
-async function api(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify(body || {}) });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.error || "Request failed");
-  return d;
-}
-
-async function refreshSdn() {
-  try {
-    const s = await (await fetch("/api/state")).json();
-    $("sdnState").textContent = s.dynamic
-      ? "Dynamic controller app: RUNNING. Pinned paths: " +
-        (s.controller.pins.length ? s.controller.pins.map(p => p.join("→")).join(", ") : "none (default routing)") + "."
-      : "Dynamic controller app not detected - start dynamic_path_app.py with ryu-manager (see README). " +
-        "The controls below need it.";
-    const imp = Object.entries(s.impaired || {});
-    $("impState").textContent = imp.length
-      ? "Active impairments: " + imp.map(([k, v]) => `${k}: ${v.loss}% loss, +${v.delay} ms`).join("; ")
-      : "No impairments active.";
-  } catch (e) { $("sdnState").textContent = "Could not read controller state."; }
-}
-
-function fillLinkSelects() {
-  if (!topo) return;
-  for (const id of ["impLink", "foLink"]) {
-    const sel = $(id), keep = sel.value;
-    sel.innerHTML = topo.links.map(([a, b]) => `<option value="${a}|${b}">${a} – ${b}</option>`).join("");
-    if (keep) sel.value = keep;
-  }
-}
-
-function renderMeasure(r) {
-  const tb = document.querySelector("#measTable tbody");
-  tb.replaceChildren();
-  r.paths.forEach(p => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${p.names.join(" → ")}${p.best ? '<span class="tag">best</span>' : ""}</td><td>${p.hops}</td>
-      <td>${fmt(p.est_rtt_ms)}</td><td>${p.error ? esc(p.error) : fmt(p.measured_rtt_ms)}</td>
-      <td>${fmt(p.jitter_ms)}</td><td>${p.loss_pct === undefined ? "–" : p.loss_pct + " %"}</td>`;
-    const td = document.createElement("td"), b = document.createElement("button");
-    b.type = "button"; b.className = "ghost"; b.textContent = "Use this path";
-    b.onclick = () => guarded(async () => {
-      await api("/api/policy", { action: "apply", path: p.names });
-      say("Controller now routes over " + p.names.join(" → "));
-      await refreshSdn(); await runDiagnosis(true);
-    });
-    td.append(b); tr.append(td); tb.append(tr);
-  });
-  $("measVerdict").textContent = r.hop_count_choice_is_best
-    ? "The fewest-hop path is also the fastest here."
-    : `The fewest-hop path (${r.fewest_hops.join(" → ")}) is NOT the best: measured RTT shows ` +
-      `${r.best ? r.best.join(" → ") : "no path"} is better. Hop count alone would choose wrong.`;
-}
-
-async function guarded(fn) {
-  if (busy) return;
-  setBusy(true);
-  try { await fn(); } catch (e) { say("Error: " + e.message, true); } finally { setBusy(false); }
-}
-
-$("measureBtn").onclick = () => guarded(async () => {
-  say("Measuring every path (pin → probe → next)… this takes a few seconds per path.");
-  const r = await api("/api/measure", { dst: $("dstIp").value.trim(), count: 15 });
-  renderMeasure(r); say("Path measurement done at " + r.time + "."); await refreshSdn();
-});
-$("clearPolicyBtn").onclick = () => guarded(async () => {
-  await api("/api/policy", { action: "clear" }); say("Pinned paths cleared."); await refreshSdn();
-});
-$("impApply").onclick = () => guarded(async () => {
-  const [a, b] = $("impLink").value.split("|");
-  await api("/api/impair", { a, b, loss: +$("impLoss").value, delay: +$("impDelay").value });
-  say(`Impairment applied on ${a}–${b}. Run a diagnosis to see its effect.`); await refreshSdn();
-});
-$("impClear").onclick = () => guarded(async () => {
-  const [a, b] = $("impLink").value.split("|");
-  await api("/api/impair", { a, b, loss: 0, delay: 0 }); say("Impairment cleared."); await refreshSdn();
-});
-$("foBtn").onclick = () => guarded(async () => {
-  const dur = Math.max(4, +$("foDur").value || 10), [a, b] = $("foLink").value.split("|");
-  say(`Failover test running for ${dur} s: failing ${a}–${b} at ${(dur * 0.3).toFixed(1)} s…`);
-  const r = await api("/api/failover", { dst: $("dstIp").value.trim(), link: [a, b], duration: dur,
-                                         fail_at: dur * 0.3, restore_at: dur * 0.7 });
-  const rows = [["Probes sent / received", `${r.sent} / ${r.received}`], ["Packet loss", r.loss_pct + " %"],
-    ["Service outage", fmt(r.longest_outage_ms)],
-    ["Controller noticed link down after", r.controller_available ? fmt(r.controller_detect_ms) : "controller app not running"],
-    ["Flows reprogrammed after", r.controller_available ? fmt(r.controller_reroute_ms) : "–"],
-    ["Path after failure", r.path_after ? r.path_after.join(" → ") : "–"]];
-  if (r.warning) rows.push(["Warning", r.warning]);
-  $("foResult").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
-  say("Failover test finished; link restored."); await refreshSdn(); await loadTopology();
-});
-
-async function loadTopology() { await loadTopology_(); fillLinkSelects(); }
-loadTopology(); loadHistory(); refreshSdn();
+loadTopology(); loadHistory();
