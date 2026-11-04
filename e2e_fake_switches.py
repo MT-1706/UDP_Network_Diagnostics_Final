@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# End-to-end controller test using simulated OpenFlow switches (not Mininet).
+# The fake switches speak enough OpenFlow 1.3 over TCP for a real ryu-manager
+# and the real dynamic_path_app.py to discover links, learn hosts and install flows.
 """
 End-to-end test WITHOUT Mininet: three fake OpenFlow 1.3 switches connect to a real
 `ryu-manager` running dynamic_path_app.py.  The harness relays LLDP between the
@@ -57,16 +60,23 @@ def ipv4_frame(smac, sip, dmac, dip):
 
 
 class FakeSwitch(threading.Thread):
+     # Each FakeSwitch acts like a tiny OpenFlow 1.3 switch connected to Ryu.
+    # It reads messages from the controller and responds to handshake, echo,
+    # port-description and barrier requests; it also records flow modifications.
     def __init__(self, dpid):
         super().__init__(daemon=True)
         self.dpid, self.sock, self.buf = dpid, None, b""
         self.wlock = threading.Lock()
 
     def send(self, mtype, body=b"", xid=0):
+        # OpenFlow messages start with an 8-byte header: version, message type,
+        # total length and transaction ID. ! means network (big-endian) byte order.
         with self.wlock:
             self.sock.sendall(struct.pack("!BBHI", 4, mtype, 8 + len(body), xid) + body)
 
     def port_desc(self, no, down=False):
+         # Pack one OpenFlow port-description structure so Ryu knows the switch
+        # has ports 1, 2 and 3, and whether a particular port is administratively down.
         return struct.pack("!I4x6s2x16sIIIIIIII", no, mac_b("0a:00:00:00:%02x:%02x" % (self.dpid, no)),
                            b"s%d-eth%d" % (self.dpid, no), 0, 1 if down else 0, 0, 0, 0, 0, 0, 0)
 
@@ -78,6 +88,9 @@ class FakeSwitch(threading.Thread):
         self.send(12, struct.pack("!B7x", 2) + self.port_desc(no, down))
 
     def run(self):
+         # Connect to Ryu's OpenFlow TCP port, send HELLO, then continuously read
+        # complete messages. TCP may split or combine messages, so buffer bytes
+        # until the header's declared message length is available.
         self.sock = socket.create_connection(("127.0.0.1", 6653))
         self.send(0)                                           # HELLO
         while True:
@@ -93,6 +106,8 @@ class FakeSwitch(threading.Thread):
                 self.handle(t, xid, body)
 
     def handle(self, t, xid, body):
+        # Respond to the small set of OpenFlow message types needed by this test.
+        # Most importantly, relay LLDP between fake switches and capture FLOW_MODs.
         if t == 5:                                             # FEATURES_REQUEST
             self.send(6, struct.pack("!QIBB2xII", self.dpid, 0, 1, 0, 0, 0), xid)
         elif t == 2:                                           # ECHO_REQUEST
@@ -120,6 +135,9 @@ class FakeSwitch(threading.Thread):
             self.flow_mod(body)
 
     def flow_mod(self, b):
+         # Decode the controller's flow rule. The test only tracks priority-5
+        # host-forwarding rules, extracting destination MAC and output port.
+        # This allows us to verify that Ryu really changed the switch rule.
         cmd, prio = b[17], struct.unpack("!H", b[22:24])[0]
         mlen = struct.unpack("!H", b[42:44])[0]
         oxm, off = b[44:40 + mlen], 40 + ((mlen + 7) // 8) * 8
@@ -145,6 +163,9 @@ def rest(path):
 
 
 def wait(cond, what, timeout=25):
+     # Poll an expected condition until it becomes true or the timeout expires.
+    # Controller discovery and rerouting are asynchronous, so immediate checks
+    # would be unreliable; a short polling loop makes the test deterministic.
     t0 = time.time()
     while time.time() - t0 < timeout:
         try:
@@ -162,6 +183,9 @@ def state():
 
 
 def main():
+     # Start a real Ryu process with temporary JSON files, connect three fake
+    # switches, then test topology discovery, host learning, path pinning,
+    # automatic rerouting, unreachable destinations and recovery.
     env = dict(os.environ, SDN_STATE_FILE=STATE, SDN_POLICY_FILE=POLICY)
     log = open(os.path.join(TMP, "ryu.log"), "w")
     ryu = subprocess.Popen([RYU, "--ofp-tcp-listen-port", "6653", "--observe-links",
@@ -175,7 +199,8 @@ def main():
             switches[d].start()
         t = wait(lambda: len(rest("links")) == 6, "LLDP link discovery (6 directed links)")
         print("PASS  Ryu discovered all 3 links through LLDP relay (%.1fs)" % t)
-
+# Simulate host ARP traffic. Ryu should learn each host's MAC/IP and
+        # switch port, then install destination-MAC forwarding rules
         # --- hosts appear by ARP ------------------------------------------------
         switches[1].packet_in(1, arp_frame(1, H1, "10.0.0.1", "00:00:00:00:00:00", "10.0.0.2"))
         wait(lambda: {(d, tuple(p)) for d, p, _ in flood_out} >= {(2, (1,)), (3, (1,))}, "ARP flooded to edge ports")
@@ -187,7 +212,8 @@ def main():
         wait(lambda: flows.get((1, H2)) == 3 and flows.get((3, H2)) == 1, "flows towards h2 (direct s1-s3)")
         assert state()["paths"]["10.0.0.1->10.0.0.2"] == ["s1", "s3"], state()["paths"]
         print("PASS  hosts learned; flows installed; default path h1->h2 = s1-s3 (fewest hops)")
-
+# Ask the controller to use s1-s2-s3 even though s1-s3 is the shorter
+        # hop-count route. This models the dashboard's path measurement/pinning.
         # --- pin the 2-hop path (what 'measure every path' does) ------------------
         json.dump({"seq": 1, "pins": [[1, 2, 3], [3, 2, 1]]}, open(POLICY, "w"))
         wait(lambda: state()["policy_seq"] == 1 and state()["paths"]["10.0.0.1->10.0.0.2"] == ["s1", "s2", "s3"],
@@ -195,7 +221,9 @@ def main():
         assert state()["paths"]["10.0.0.2->10.0.0.1"] == ["s3", "s2", "s1"]
         assert flows[(1, H2)] == 2 and flows[(2, H2)] == 3
         print("PASS  policy pin s1-s2-s3 programmed in both directions (state file + flow tables agree)")
-
+# Simulate failure at both ends of s2-s3. Since the pinned route is now
+        # invalid, the controller should ignore that pin and use the remaining
+        # direct s1-s3 route. We verify both exported state and the installed flow.
         # --- link failure: the pinned s2-s3 link dies -> pin void -> reroute ------
         t0 = time.time()
         links_up[(2, 3)] = False
@@ -206,7 +234,8 @@ def main():
         assert flows[(1, H2)] == 3
         print("PASS  link s2-s3 failed -> controller rerouted h1->h2 via s1-s3 in %.2fs" % dt)
         assert any("LinkDelete" in e["msg"] for e in state()["events"])
-
+ # Now also remove s1-s3. With no path left, the controller should report
+        # None and delete stale forwarding rules rather than keep a broken route.
         # --- failure of the last path -> hosts disconnected ---------------------
         links_up[(1, 3)] = False
         switches[1].port_status(3, True)
@@ -214,7 +243,8 @@ def main():
         wait(lambda: state()["paths"]["10.0.0.1->10.0.0.2"] is None, "h2 unreachable")
         wait(lambda: (1, H2) not in flows, "stale flow removed from s1")
         print("PASS  no route left -> path reported as None and stale flow deleted")
-
+# Bring both failed links back and clear dashboard pins. The controller
+        # should rediscover the topology and return to its default s1-s3 route.
         # --- restore ------------------------------------------------------------
         links_up[(2, 3)] = links_up[(1, 3)] = True
         switches[2].port_status(3, False)
